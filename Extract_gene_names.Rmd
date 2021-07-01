@@ -1,0 +1,113 @@
+```{r}
+library(biomaRt)
+library(dplyr)
+
+##############################################
+##                                          ##
+## Determine parameters to use for biomaRt  ##
+##                                          ##
+##############################################
+
+listEnsembl()
+#        biomart                version
+#1         genes      Ensembl Genes 104
+#2 mouse_strains      Mouse strains 104
+#3          snps  Ensembl Variation 104
+#4    regulation Ensembl Regulation 104
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+searchDatasets(mart = ensembl, pattern = "hsapiens")
+#                 dataset              description    version
+#80 hsapiens_gene_ensembl Human genes (GRCh38.p13) GRCh38.p13
+
+ensembl98 <- useEnsembl(biomart = "genes", 
+                        dataset = "hsapiens_gene_ensembl",
+                        version = 98) #Ensemble 98 matches reference genome used for CellRanger alignment
+
+listFilters(ensembl98)[1:5,]
+#             name              description
+#1 chromosome_name Chromosome/scaffold name
+#2           start                    Start
+#3             end                      End
+#4      band_start               Band Start
+#5        band_end                 Band End
+
+attributes <- listAttributes(ensembl98) #view attributes to determine which gives the desired output (gene names)
+
+##############################################
+##                                          ##
+## Create list of ranges for all GWAS loci  ##
+##                                          ##
+##############################################
+
+list.of.loci <- c(207577223, 127135234, 233117202, 11023507, 32615322, 41036354, 41161469, 41161514, 41181270, 47517390,
+                  37844191, 100334426, 143413669, 27362470, 27607795, 11676714, 47370397, 60254475, 86157598, 121482368,
+                  121564878, 52924962, 92464917, 92472511, 50701814, 58764824, 63277703, 31111250, 70660097, 81739398, 
+                  81908423, 5233752, 46779275, 49219935, 58332680, 63471557, 1050875, 56423488, 26775872, 109345810,
+                  9558882, 37304796, 105749599, 202878716, 155069722, 155084189, 993555, 40197226, 14724304, 86927378,
+                  151052827, 180201150, 114291731, 7817263, 8204382, 12229967, 28129126, 54873635, 11844613, 144103704, 
+                  104903697, 60025170, 80494228, 96266650, 122413396, 113281983, 105761758, 106665591, 64131307, 78936857,
+                  30010081, 79574511, 86420604, 90103687, 1728046, 18156140, 44352876, 1854254, 49950060, 54267597,
+                  413334, 63743088, 26101558, 44908684)
+
+ranges <- as.data.frame(list.of.loci)
+
+#Add names, which represent the nearest protein-coding gene to the SNP
+ranges$name <- c("CR1", "BIN1", "INPP5D", "CLNK", "HLA-DQA1", "UNC5CL", "TREM2", "TREM2", "TREML2", "CD2AP", 
+                 "EPDR1", "SPDYE3", "EPHA1", "PTK2B", "CLU", "USP6NL", "SPI1", "MS4A4A", "EED", "SORL1", 
+                 "SORL1", "FERMT2", "SLC24A4", "SLC24A4", "SPPL2A", "MINDY2", "APH1B", "BCKDK", "IL34", "PLCG2",
+                 "PLCG2", "SCIMP", "WNT3", "ABI3", "TSPOAP1", "ACE", "ABCA7", "CASS4", "ADAMTS1", "SORT1", 
+                 "ADAM17", "PRKD3", "NCK2", "WDR12", "MME", "MME", "IDUA", "RHOH", "ANKH", "COX7C", 
+                 "TNIP1", "RASGEF1C", "HS3ST5", "UMAD1", "ICA1", "TMEM106B", "JAZF1", "SEC61G", "CTSB", "SHARPIN", 
+                 "ABCA1", "ANK3", "TSPAN14", "BLNK", "PLEKHA1", "TPCN1", "IGH gene cluster", "IGH gene cluster", "SNX1", "CTSH", 
+                 "DOC2A", "MAF", "FOXF1", "PRDM7", "WDR81", "MYO15A", "GRN", "KLF16", "SIGLEC11", "LILRB2", 
+                 "RBCK1", "SLC2A4RG", "APP", "APOE")
+
+ranges$chromosome <- c(1,2,2,4,6,6,6,6,6,6,
+                       7,7,7,8,8,10,11,11,11,11,
+                       11,14,14,14,15,15,15,16,16,16,
+                       16,17,17,17,17,17,19,20,21,1,
+                       2,2,2,2,3,3,4,4,5,5,
+                       5,5,6,7,7,7,7,7,8,8,
+                       9,10,10,10,10,12,14,14,15,15,
+                       16,16,16,16,17,17,17,19,19,19,
+                       20,20,21,19)
+
+ranges$start <- list.of.loci-500000
+ranges$end <- list.of.loci+500000
+ranges[ranges < 0] <- 0 #convert negative values to zero
+
+#################################################
+##                                             ##
+## Loop through each locus to get genes+-500kb ##
+##                                             ##
+#################################################
+
+#make empty df
+loci.table <- data.frame(matrix(ncol=6,nrow=0, dimnames=list(NULL, c("list.of.loci", 
+                                                          "name", 
+                                                          "chromosome",
+                                                          "start",
+                                                          "end",
+                                                          "external_gene_name"))))
+
+for (i in 1:length(list.of.loci)){
+  var1<-unlist(getBM(attributes = "external_gene_name",
+                          filters = c("chromosome_name", "start", "end"),
+                          values = list(chromosome=ranges[i,3], start=ranges[i,4], end=ranges[i,5]),
+                          mart = ensembl98))
+ 
+   df_intermediate <- data.frame("list.of.loci"=rep(ranges[i,1],length(var1)),
+                                "name"=rep(ranges[i,2],length(var1)),
+                                "chromosome"=rep(ranges[i,3],length(var1)),
+                                "start"=rep(ranges[i,4],length(var1)),
+                                "end"=rep(ranges[i,5],length(var1)),
+                                "external_gene_name"=var1,
+                                row.names=NULL)
+  
+   loci.table <- rbind(loci.table,df_intermediate)
+}
+
+write.csv(loci.table, "Bellenguez_et_al_1Mb_genes.csv")
+```
